@@ -177,7 +177,30 @@ function App() {
     a.click();
   };
 
-  const reset = ()=>{setStep("upload");setFile(null);setFileData(null);setPasteText("");setQueryData(null);setEditableQ({});setImagePool(null);setActiveTab(null);setPicks({});setLightbox(null);setShowPicks(false);setError("");setRegenState({});};
+  const reset = ()=>{
+    if(picksCount>0){
+      if(!window.confirm("You have "+picksCount+" unsaved picks. Export your CSV before starting a new audit — otherwise they'll be lost. Continue anyway?")) return;
+    }
+    setStep("upload");setFile(null);setFileData(null);setPasteText("");setQueryData(null);setEditableQ({});setImagePool(null);setActiveTab(null);setPicks({});setLightbox(null);setShowPicks(false);setError("");setRegenState({});
+  };
+
+  const saveQueries = () => {
+    if(!queryData) return;
+    const key = "spg_queries_"+(queryData.country||"unknown").toLowerCase().replace(/\s+/g,"_");
+    localStorage.setItem(key, JSON.stringify({country:queryData.country,locale:queryData.locale,queries:editableQ,savedAt:new Date().toLocaleDateString()}));
+    alert("Queries saved for "+queryData.country+". They'll load automatically next time you run this country.");
+  };
+
+  const loadSavedQueries = (country) => {
+    const key = "spg_queries_"+country.toLowerCase().replace(/\s+/g,"_");
+    try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+  };
+
+  const hasSavedQueries = (country) => {
+    if(!country) return null;
+    const key = "spg_queries_"+country.toLowerCase().replace(/\s+/g,"_");
+    try { const d = JSON.parse(localStorage.getItem(key)); return d||null; } catch { return null; }
+  };
 
   const totalImages = imagePool?Object.values(imagePool).flatMap(Object.values).flat().length:0;
   const totalEditableQ = Object.values(editableQ).flat().length;
@@ -269,11 +292,24 @@ function App() {
                 <div style={{fontSize:24,fontWeight:700,marginBottom:6}}>{queryData.country}</div>
                 <div style={{fontSize:13,opacity:0.75}}>{queryData.style_direction}</div>
               </div>
-              <div style={{color:"#fff",textAlign:"right"}}>
-                <div style={{fontSize:28,fontWeight:700}}>{totalEditableQ}</div>
-                <div style={{fontSize:12,opacity:0.65}}>queries ready</div>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:28,fontWeight:700}}>{totalEditableQ}</div>
+                  <div style={{fontSize:12,opacity:0.65}}>queries ready</div>
+                </div>
+                <button onClick={saveQueries}
+                  style={{padding:"6px 14px",background:"rgba(255,255,255,0.2)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:7,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                  Save queries for {queryData.country}
+                </button>
               </div>
             </div>
+            {(()=>{const saved=hasSavedQueries(queryData.country);return saved?(
+              <div style={{background:"#f0fdf4",border:"0.5px solid #bbf7d0",borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <div style={{fontSize:13,color:"#15803d"}}>Saved queries found for {queryData.country} from {saved.savedAt}</div>
+                <button onClick={()=>{setEditableQ(saved.queries);}}
+                  style={{padding:"6px 14px",background:"#15803d",color:"#fff",border:"none",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer"}}>Load saved queries</button>
+              </div>
+            ):null;})()}
             <div style={{background:"#f0ebff",border:"0.5px solid #c4b5fd",borderRadius:10,padding:"12px 16px",marginBottom:20,fontSize:13,color:"#5b21b6"}}>
               Review your queries. Remove, edit or add your own. Then hit Fetch Images.
             </div>
