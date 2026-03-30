@@ -135,10 +135,16 @@ function App() {
     setRegenState(prev=>({...prev,[key]:{...prev[key],loading:true}}));
     const locale = queryData&&queryData.locale?queryData.locale:"en-US";
     try {
-      const r = await fetch(PROXY+"/search?query="+encodeURIComponent(newQ)+"&per_page=20&locale="+locale);
+      const r = await fetch(PROXY+"/search?query="+encodeURIComponent(newQ.trim())+"&per_page=20&locale="+locale);
       const d = await r.json();
-      const photos = (d.photos||[]).map(p=>({id:p.id,query:newQ,category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
-      setImagePool(prev=>({...prev,[cat]:{...prev[cat],[oldQ]:photos}}));
+      const photos = (d.photos||[]).map(p=>({id:p.id,query:newQ.trim(),category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
+      setImagePool(prev=>{
+        const updated = Object.assign({},prev);
+        updated[cat] = Object.assign({},prev[cat]);
+        delete updated[cat][oldQ];
+        updated[cat][newQ.trim()] = photos;
+        return updated;
+      });
       setRegenState(prev=>({...prev,[key]:{show:false,loading:false,suggestion:"",input:""}}));
     } catch {
       setRegenState(prev=>({...prev,[key]:{...prev[key],loading:false}}));
