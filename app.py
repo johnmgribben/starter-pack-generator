@@ -4,7 +4,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["https://gleeful-melba-80c40e.netlify.app", "http://localhost:3000", "*"])
 
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
