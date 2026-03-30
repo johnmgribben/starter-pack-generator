@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canva Starter Pack Generator</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, 'Inter', system-ui, sans-serif; background: #f5f5f5; color: #1a1a2e; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const PROXY = "https://starter-pack-generator.onrender.com";
+const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const CATEGORIES = ["People & Lifestyle","Food & Drink","Culture & Identity","Places & Environment","Events & Seasonal"];
+const CAT_ICONS = {"People & Lifestyle":"👥","Food & Drink":"🍜","Culture & Identity":"🏮","Places & Environment":"🏙️","Events & Seasonal":"🎉"};
+const CAT_COLORS = {"People & Lifestyle":"#3b82f6","Food & Drink":"#f59e0b","Culture & Identity":"#ef4444","Places & Environment":"#10b981","Events & Seasonal":"#8b5cf6"};
+const CAT_BG = {"People & Lifestyle":"#eff6ff","Food & Drink":"#fffbeb","Culture & Identity":"#fef2f2","Places & Environment":"#f0fdf4","Events & Seasonal":"#f5f3ff"};
+
+const SYSTEM_PROMPT = `You are a visual content strategist helping Canva generate image search queries for country starter packs.
+Given a visual content audit:
+1. Extract country name, top themes, style direction
+2. Identify Pexels locale code (Vietnam=vi-VN, Brazil=pt-BR, Japan=ja-JP, Korea=ko-KR, Thailand=th-TH, Indonesia=id-ID, China=zh-CN, Netherlands=nl-NL, France=fr-FR, Germany=de-DE, default en-US)
+3. Map to 5 categories: People & Lifestyle, Food & Drink, Culture & Identity, Places & Environment, Events & Seasonal
+4. Generate 6-8 queries per category
+
+FOR EMERGING/CULTURAL MARKETS: Lead with country name + distinctive cultural visual. Translate local terms visually.
+FOR WESTERN EUROPEAN MARKETS: Use specific places and behaviours. City names, landmarks, specific local contexts. AVOID generic terms.
+
+Rules: SHORT 3-5 words, ALWAYS include country name, FAVOR candid real-life natural light, AVOID studio shots.
+
+Respond ONLY with valid JSON no markdown:
+{"country":"string","locale":"string","style_direction":"string","priority_themes":["string"],"categories":{"People & Lifestyle":["q1"],"Food & Drink":["q1"],"Culture & Identity":["q1"],"Places & Environment":["q1"],"Events & Seasonal":["q1"]}}`;
+
+function App() {
+  const [step, setStep] = React.useState("upload");
+  const [file, setFile] = React.useState(null);
+  const [fileData, setFileData] = React.useState(null);
+  const [pasteText, setPasteText] = React.useState("");
+  const [queryData, setQueryData] = React.useState(null);
+  const [editableQ, setEditableQ] = React.useState({});
+  const [newQInputs, setNewQInputs] = React.useState({});
+  const [imagePool, setImagePool] = React.useState(null);
+  const [activeTab, setActiveTab] = React.useState(null);
+  const [picks, setPicks] = React.useState({});
+  const [lightbox, setLightbox] = React.useState(null);
+  const [showPicks, setShowPicks] = React.useState(false);
+  const [progress, setProgress] = React.useState({current:0,total:0,label:""});
+  const [error, setError] = React.useState("");
+  const fileRef = React.useRef();
+
+  const handleFile = f => {
+    if (!f || f.type !== "application/pdf") return;
+    setFile(f);
+    const r = new FileReader();
+    r.onload = e => setFileData(e.target.result.split(",")[1]);
+    r.readAsDataURL(f);
+  };
+
+  const generateQueries = async () => {
+    if (!fileData && !pasteText.trim()) { setError("Please upload a PDF or paste audit text."); return; }
+    setError(""); setStep("generating");
+    try {
+      const msgs = fileData
+        ? [{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:fileData}},{type:"text",text:"Extract visual content gaps and generate starter pack queries."}]}]
+        : [{role:"user",content:`Audit:\n\n${pasteText}\n\nExtract gaps and generate starter pack queries.`}];
+      const res = await fetch(ANTHROPIC_API, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:SYSTEM_PROMPT,messages:msgs})
+      });
+      const data = await res.json();
+      const raw = data.content?.find(b=>b.type==="text")?.text||"";
+      const parsed = JSON.parse(raw.replace(/```json|```/g,"").trim());
+      setQueryData(parsed);
+      const eq={}, nq={};
+      CATEGORIES.forEach(cat=>{eq[cat]=[...(parsed.categories?.[cat]||[])];nq[cat]="";});
+      setEditableQ(eq); setNewQInputs(nq); setStep("review");
+    } catch(e) { setError("Something went wrong. Please try again."); setStep("upload"); }
+  };
+
+  const removeQ = (cat,idx) => setEditableQ(prev=>({...prev,[cat]:prev[cat].filter((_,i)=>i!==idx)}));
+  const updateQ = (cat,idx,val) => setEditableQ(prev=>{const u=[...prev[cat]];u[idx]=val;return{...prev,[cat]:u};});
+  const addQ = cat => {
+    const val=newQInputs[cat]?.trim();
+    if(!val) return;
+    setEditableQ(prev=>({...prev,[cat]:[...prev[cat],val]}));
+    setNewQInputs(prev=>({...prev,[cat]:""}));
+  };
+
+  const fetchImages = async () => {
+    setStep("fetching");
+    const locale = queryData?.locale||"en-US";
+    const totalQ = Object.values(editableQ).flat().length;
+    let done=0; const pool={}; const seenIds=new Set();
+    for (const cat of CATEGORIES) {
+      pool[cat]={};
+      for (const q of (editableQ[cat]||[])) {
+        setProgress({current:++done,total:totalQ,label:q});
+        try {
+          const r = await fetch(`${PROXY}/search?query=${encodeURIComponent(q)}&per_page=20&locale=${locale}`);
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const d = await r.json();
+          pool[cat][q]=(d.photos||[]).filter(p=>{if(seenIds.has(p.id))return false;seenIds.add(p.id);return true;})
+            .map(p=>({id:p.id,query:q,category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
+        } catch(err){console.error(q,err);pool[cat][q]=[];}
+      }
+    }
+    setImagePool(pool); setActiveTab(CATEGORIES[0]); setStep("gallery");
+  };
+
+  const togglePick = img => setPicks(prev=>{const u={...prev};if(u[img.id])delete u[img.id];else u[img.id]=img;return u;});
+  const isPicked = id => !!picks[id];
+  const picksCount = Object.keys(picks).length;
+
+  const exportPicks = () => {
+    const rows=[["ID","Category","Query","Photographer","Pexels URL","Image URL"]];
+    Object.values(picks).forEach(p=>rows.push([p.id,p.category,p.query,p.photographer,p.url,p.full]));
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n")],{type:"text/csv"}));
+    a.download=`${queryData?.country?.toLowerCase().replace(/\s+/g,"_")||"starter_pack"}_picks.csv`;
+    a.click();
+  };
+
+  const reset = () => {setStep("upload");setFile(null);setFileData(null);setPasteText("");setQueryData(null);setEditableQ({});setImagePool(null);setActiveTab(null);setPicks({});setLightbox(null);setShowPicks(false);setError("");};
+
+  const totalImages = imagePool?Object.values(imagePool).flatMap(Object.values).flat().length:0;
+  const totalEditableQ = Object.values(editableQ).flat().length;
+  const stepLabels = ["Upload","Generating","Review Queries","Fetching","Gallery"];
+  const stepIdx = {upload:0,generating:1,review:2,fetching:3,gallery:4};
+  const currentStep = stepIdx[step]??0;
+
+  return (
+    <div style={{fontFamily:"-apple-system,'Inter',system-ui,sans-serif",background:"#f5f5f5",minHeight:"100vh"}}>
+      {/* Nav */}
+      <div style={{background:"#fff",borderBottom:"0.5px solid #e8e8e8",padding:"0 24px",height:50,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{background:"#7c3aed",borderRadius:6,width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>✦</div>
+          <span style={{fontWeight:600,fontSize:14,color:"#1a1a2e"}}>Starter Pack Generator</span>
+          <span style={{background:"#f0ebff",borderRadius:5,padding:"2px 7px",fontSize:10,color:"#7c3aed",fontWeight:600}}>Internal Tool</span>
+        </div>
+        {step==="gallery" && (
+          <div style={{display:"flex",gap:8}}>
+            {picksCount>0&&<><button onClick={()=>setShowPicks(!showPicks)} style={{padding:"7px 14px",background:showPicks?"#7c3aed":"#f0f0f0",color:showPicks?"#fff":"#333",border:"none",borderRadius:7,fontWeight:600,fontSize:13,cursor:"pointer"}}>⭐ Picks ({picksCount})</button>
+            <button onClick={exportPicks} style={{padding:"7px 14px",background:"#10b981",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:13,cursor:"pointer"}}>↓ Export CSV</button></>}
+            <button onClick={reset} style={{padding:"7px 14px",background:"#f0f0f0",color:"#555",border:"none",borderRadius:7,fontSize:13,cursor:"pointer"}}>← New Audit</button>
+          </div>
+        )}
+      </div>
+
+      <div style={{maxWidth:900,margin:"0 auto",padding:"32px 20px"}}>
+        {/* Step tracker */}
+        {step!=="gallery"&&(
+          <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:0,marginBottom:32}}>
+            {stepLabels.map((label,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center"}}>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
+                  <div style={{width:26,height:26,borderRadius:"50%",background:currentStep>=i?"#7c3aed":"#e8e8e8",color:currentStep>=i?"#fff":"#aaa",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{currentStep>i?"✓":i+1}</div>
+                  <span style={{fontSize:10,color:currentStep===i?"#7c3aed":"#aaa",fontWeight:currentStep===i?700:400,whiteSpace:"nowrap"}}>{label}</span>
+                </div>
+                {i<stepLabels.length-1&&<div style={{width:40,height:2,background:currentStep>i?"#7c3aed":"#e8e8e8",margin:"0 4px",marginBottom:18,flexShrink:0}}/>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* UPLOAD */}
+        {step==="upload"&&(
+          <div style={{maxWidth:560,margin:"0 auto"}}>
+            <div style={{textAlign:"center",marginBottom:28}}>
+              <h1 style={{fontSize:24,fontWeight:700,margin:"0 0 8px",letterSpacing:"-0.5px"}}>Generate a Visual Starter Pack</h1>
+              <p style={{color:"#888",margin:0,fontSize:14}}>Upload a locale audit → review queries → fetch image pool</p>
+            </div>
+            <div style={{background:"#fff",borderRadius:12,padding:24,border:"0.5px solid #e8e8e8",marginBottom:14}}>
+              <label style={{fontSize:12,fontWeight:600,color:"#333",display:"block",marginBottom:8}}>📄 Locale Audit</label>
+              <div onDrop={e=>{e.preventDefault();handleFile(e.dataTransfer.files[0]);}} onDragOver={e=>e.preventDefault()} onClick={()=>fileRef.current.click()}
+                style={{border:`2px dashed ${file?"#7c3aed":"#d1d5db"}`,borderRadius:8,padding:22,textAlign:"center",cursor:"pointer",background:file?"#f5f3ff":"#fafafa",marginBottom:12}}>
+                <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+                {file?<div><div style={{fontSize:24,marginBottom:4}}>📄</div><div style={{fontWeight:600,color:"#7c3aed",fontSize:13}}>{file.name}</div></div>
+                :<div><div style={{fontSize:24,marginBottom:4}}>📁</div><div style={{fontWeight:600,fontSize:13}}>Drop PDF or click to browse</div></div>}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                <div style={{flex:1,height:1,background:"#e8e8e8"}}/><span style={{color:"#aaa",fontSize:11}}>or paste text</span><div style={{flex:1,height:1,background:"#e8e8e8"}}/>
+              </div>
+              <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)} placeholder="Paste audit content here..."
+                style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",border:"1.5px solid #e8e8e8",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit",height:100,resize:"vertical"}}/>
+            </div>
+            <div style={{background:"#f0fdf4",border:"0.5px solid #bbf7d0",borderRadius:8,padding:"10px 14px",marginBottom:14}}>
+              <div style={{fontSize:12,color:"#15803d"}}>✓ Connected to Pexels via secure server · No API key needed</div>
+            </div>
+            {error&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 14px",color:"#dc2626",fontSize:13,marginBottom:12}}>⚠️ {error}</div>}
+            <button onClick={generateQueries} disabled={!fileData&&!pasteText.trim()}
+              style={{width:"100%",padding:13,background:(!fileData&&!pasteText.trim())?"#e8e8e8":"#7c3aed",color:(!fileData&&!pasteText.trim())?"#aaa":"#fff",border:"none",borderRadius:9,fontWeight:700,fontSize:15,cursor:(!fileData&&!pasteText.trim())?"not-allowed":"pointer"}}>
+              Generate Queries →
+            </button>
+          </div>
+        )}
+
+        {/* GENERATING */}
+        {step==="generating"&&(
+          <div style={{background:"#fff",borderRadius:12,padding:"60px 40px",maxWidth:480,margin:"0 auto",textAlign:"center",border:"0.5px solid #e8e8e8"}}>
+            <div style={{fontSize:40,marginBottom:16}}>🧠</div>
+            <div style={{fontWeight:700,fontSize:18,marginBottom:8}}>Reading your audit…</div>
+            <div style={{color:"#888",fontSize:14}}>Extracting gaps and translating into visual search queries</div>
+          </div>
+        )}
+
+        {/* REVIEW */}
+        {step==="review"&&queryData&&(
+          <div>
+            <div style={{background:"#7c3aed",borderRadius:12,padding:"22px 28px",marginBottom:20,color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:1.5,opacity:0.6,marginBottom:6}}>Review & Edit Queries</div>
+                <div style={{fontSize:24,fontWeight:700,marginBottom:6}}>🌏 {queryData.country}</div>
+                <div style={{fontSize:13,opacity:0.75}}>{queryData.style_direction}</div>
+              </div>
+              <div style={{color:"#fff",textAlign:"right"}}>
+                <div style={{fontSize:28,fontWeight:700}}>{totalEditableQ}</div>
+                <div style={{fontSize:12,opacity:0.65}}>queries ready</div>
+              </div>
+            </div>
+            <div style={{background:"#f0ebff",border:"0.5px solid #c4b5fd",borderRadius:10,padding:"12px 16px",marginBottom:20,fontSize:13,color:"#5b21b6"}}>
+              ✏️ <strong>Review your queries.</strong> Remove, edit or add your own. Then hit Fetch Images.
+            </div>
+            {CATEGORIES.map(cat=>{
+              const queries=editableQ[cat]||[];
+              return(
+                <div key={cat} style={{background:"#fff",borderRadius:12,padding:24,border:"0.5px solid #e8e8e8",marginBottom:14,borderLeft:`3px solid ${CAT_COLORS[cat]}`}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+                    <div style={{fontWeight:700,fontSize:15}}>{CAT_ICONS[cat]} {cat}</div>
+                    <div style={{fontSize:12,color:"#aaa"}}>{queries.length} queries</div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+                    {queries.map((q,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <input value={q} onChange={e=>updateQ(cat,i,e.target.value)}
+                          style={{flex:1,padding:"9px 12px",border:"1.5px solid #e8e8e8",borderRadius:7,fontSize:12,fontFamily:"monospace",outline:"none"}}/>
+                        <button onClick={()=>removeQ(cat,i)}
+                          style={{width:30,height:30,background:"#fef2f2",border:"0.5px solid #fecaca",borderRadius:6,color:"#dc2626",fontSize:14,cursor:"pointer",flexShrink:0}}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <input value={newQInputs[cat]||""} onChange={e=>setNewQInputs(prev=>({...prev,[cat]:e.target.value}))}
+                      onKeyDown={e=>e.key==="Enter"&&addQ(cat)} placeholder={`Add a query…`}
+                      style={{flex:1,padding:"9px 12px",border:"1.5px solid #e8e8e8",borderRadius:7,fontSize:12,fontFamily:"monospace",outline:"none",background:"#fafafa"}}/>
+                    <button onClick={()=>addQ(cat)}
+                      style={{padding:"9px 14px",background:CAT_BG[cat],border:`0.5px solid ${CAT_COLORS[cat]}44`,borderRadius:7,color:CAT_COLORS[cat],fontWeight:700,fontSize:13,cursor:"pointer"}}>+ Add</button>
+                  </div>
+                </div>
+              );
+            })}
+            <button onClick={fetchImages}
+              style={{width:"100%",padding:13,background:"#7c3aed",color:"#fff",border:"none",borderRadius:9,fontWeight:700,fontSize:15,cursor:"pointer",marginTop:8}}>
+              Fetch {totalEditableQ} Queries → Get Images
+            </button>
+          </div>
+        )}
+
+        {/* FETCHING */}
+        {step==="fetching"&&(
+          <div style={{background:"#fff",borderRadius:12,padding:"60px 40px",maxWidth:480,margin:"0 auto",textAlign:"center",border:"0.5px solid #e8e8e8"}}>
+            <div style={{fontSize:40,marginBottom:16}}>🖼️</div>
+            <div style={{fontWeight:700,fontSize:18,marginBottom:6}}>Fetching image pool…</div>
+            <div style={{color:"#7c3aed",fontSize:12,fontFamily:"monospace",marginBottom:20,background:"#f5f3ff",padding:"5px 12px",borderRadius:6,display:"inline-block"}}>"{progress.label}"</div>
+            <div style={{background:"#e8e8e8",borderRadius:99,height:6,overflow:"hidden",marginBottom:8}}>
+              <div style={{height:"100%",background:"#7c3aed",borderRadius:99,width:`${(progress.current/progress.total)*100}%`,transition:"width 0.3s"}}/>
+            </div>
+            <div style={{fontSize:12,color:"#aaa"}}>{progress.current} of {progress.total} queries</div>
+          </div>
+        )}
+
+        {/* GALLERY */}
+        {step==="gallery"&&queryData&&imagePool&&(
+          <div>
+            <div style={{background:"linear-gradient(135deg,#7c3aed,#4f46e5)",borderRadius:12,padding:"22px 28px",marginBottom:20,color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{fontSize:22,fontWeight:700}}>🌏 {queryData.country}</div>
+                <div style={{opacity:0.8,fontSize:13,marginTop:4,maxWidth:500}}>{queryData.style_direction}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10}}>
+                  {(queryData.priority_themes||[]).map(t=><span key={t} style={{background:"rgba(255,255,255,0.18)",borderRadius:20,padding:"3px 10px",fontSize:11,fontWeight:600}}>{t}</span>)}
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:28,fontWeight:700}}>{totalImages}</div>
+                <div style={{opacity:0.7,fontSize:12}}>candidate images</div>
+                {picksCount>0&&<div style={{marginTop:6,fontSize:12,opacity:0.9}}>⭐ {picksCount} picked</div>}
+              </div>
+            </div>
+
+            {showPicks&&picksCount>0&&(
+              <div style={{background:"#fff",borderRadius:12,padding:20,marginBottom:16,border:"2px solid #7c3aed"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div style={{fontWeight:700,fontSize:14,color:"#7c3aed"}}>⭐ My Picks — {picksCount} images</div>
+                  <button onClick={exportPicks} style={{padding:"7px 14px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer"}}>↓ Export CSV</button>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8}}>
+                  {Object.values(picks).map(p=>(
+                    <div key={p.id} style={{position:"relative",borderRadius:7,overflow:"hidden",aspectRatio:"16/10"}}>
+                      <img src={p.thumb} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                      <button onClick={()=>togglePick(p)} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.5)",border:"none",borderRadius:"50%",width:20,height:20,color:"#fff",fontSize:10,cursor:"pointer"}}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>
+              {CATEGORIES.map(cat=>{
+                const count=imagePool[cat]?Object.values(imagePool[cat]).flat().length:0;
+                const catPicks=Object.values(picks).filter(p=>p.category===cat).length;
+                return(
+                  <button key={cat} onClick={()=>setActiveTab(cat)}
+                    style={{padding:"8px 16px",borderRadius:99,border:`2px solid ${activeTab===cat?CAT_COLORS[cat]:"#e8e8e8"}`,background:activeTab===cat?CAT_BG[cat]:"#fff",fontWeight:activeTab===cat?700:400,fontSize:12,cursor:"pointer",color:activeTab===cat?"#1a1a2e":"#666",display:"flex",alignItems:"center",gap:6}}>
+                    {CAT_ICONS[cat]} {cat}
+                    <span style={{background:activeTab===cat?CAT_COLORS[cat]:"#e8e8e8",color:activeTab===cat?"#fff":"#888",borderRadius:99,padding:"1px 7px",fontSize:10,fontWeight:700}}>{count}</span>
+                    {catPicks>0&&<span style={{background:"#f59e0b",color:"#fff",borderRadius:99,padding:"1px 6px",fontSize:10}}>⭐{catPicks}</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            {activeTab&&imagePool[activeTab]&&Object.entries(imagePool[activeTab]).map(([q,photos])=>(
+              <div key={q} style={{marginBottom:24}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                  <span style={{fontFamily:"monospace",fontSize:11,background:"#f3f4f6",padding:"4px 10px",borderRadius:6,color:"#555"}}>"{q}"</span>
+                  <span style={{fontSize:11,color:"#bbb"}}>{photos.length} images</span>
+                </div>
+                {photos.length===0?<div style={{color:"#aaa",fontSize:13}}>No results</div>
+                :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:7}}>
+                  {photos.map(p=>(
+                    <div key={p.id} style={{position:"relative",borderRadius:8,overflow:"hidden",aspectRatio:"16/10",cursor:"pointer",outline:isPicked(p.id)?`3px solid ${CAT_COLORS[activeTab]}`:"none",outlineOffset:2}}>
+                      <img src={p.thumb} onClick={()=>setLightbox(p)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                      <button onClick={e=>{e.stopPropagation();togglePick(p);}}
+                        style={{position:"absolute",top:6,right:6,background:isPicked(p.id)?"#f59e0b":"rgba(0,0,0,0.45)",border:"none",borderRadius:"50%",width:28,height:28,color:"#fff",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        {isPicked(p.id)?"⭐":"+"}
+                      </button>
+                      {isPicked(p.id)&&<div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(245,158,11,0.9)",padding:"3px 8px",fontSize:10,color:"#fff",fontWeight:700,textAlign:"center"}}>PICKED</div>}
+                    </div>
+                  ))}
+                </div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {lightbox&&(
+        <div onClick={()=>setLightbox(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,overflow:"hidden",maxWidth:800,width:"100%"}}>
+            <img src={lightbox.full} style={{width:"100%",maxHeight:"65vh",objectFit:"contain",background:"#111",display:"block"}}/>
+            <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:14}}>📸 {lightbox.photographer}</div>
+                <div style={{color:"#888",fontSize:12,fontFamily:"monospace",marginTop:2}}>"{lightbox.query}"</div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>togglePick(lightbox)} style={{padding:"8px 16px",background:isPicked(lightbox.id)?"#f59e0b":"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                  {isPicked(lightbox.id)?"⭐ Picked!":"+ Pick this"}
+                </button>
+                <a href={lightbox.url} target="_blank" rel="noreferrer" style={{padding:"8px 14px",background:"#f3f4f6",color:"#333",borderRadius:7,fontSize:13,fontWeight:600,textDecoration:"none"}}>View on Pexels ↗</a>
+                <button onClick={()=>setLightbox(null)} style={{padding:"8px 12px",background:"#f3f4f6",border:"none",borderRadius:7,fontSize:13,cursor:"pointer"}}>✕</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.render(React.createElement(App), document.getElementById("root"));
+</script>
+</body>
+</html>
