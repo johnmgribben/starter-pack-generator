@@ -26,13 +26,17 @@ Given a visual content audit:
 3. Map to 5 categories: People & Lifestyle, Food & Drink, Culture & Identity, Places & Environment, Events & Seasonal
 4. Generate 6-8 queries per category
 
-CRITICAL: MAXIMUM 4 WORDS per query. ALWAYS start with country name.
-GOOD examples: "thailand songkran street", "vietnam pho vendor", "bangkok night market"
-BAD examples: "thailand families celebrating water festival", "vietnam people eating street food together"
-Translate local terms visually. Favor candid street-level natural light. Avoid studio shots tourist imagery.
+CRITICAL QUERY RULES:
+- MAXIMUM 4 WORDS per query
+- ALWAYS start with country name
+- Be specific not generic
+GOOD: "thailand songkran street", "vietnam pho vendor", "bangkok night market"
+BAD: "thailand families celebrating water festival", "vietnam people eating street food together"
+
+Translate local terms visually. Favor candid street-level natural light. Avoid studio shots and tourist imagery.
 For Western European markets use city names and specific behaviours e.g. "amsterdam canal cycling"
 
-Respond ONLY with valid JSON no markdown:
+Respond ONLY with valid JSON, no markdown:
 {"country":"string","locale":"string","style_direction":"string","priority_themes":["string"],"categories":{"People & Lifestyle":["q1"],"Food & Drink":["q1"],"Culture & Identity":["q1"],"Places & Environment":["q1"],"Events & Seasonal":["q1"]}}`;
 
 function App() {
@@ -113,41 +117,50 @@ function App() {
   };
 
   const suggestQuery = async (cat, q) => {
-    const key = cat+"__"+q;
-    setRegenState(prev=>({...prev,[key]:{loading:true,suggestion:"",input:"",show:true}}));
+    const key = cat+"||"+q;
+    setRegenState(prev=>({...prev,[key]:{loading:true,input:"",show:true}}));
     try {
       const r = await fetch(PROXY+"/claude", {
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:50,
-          messages:[{role:"user",content:'The Pexels query "'+q+'" for '+queryData.country+' gave poor or repetitive results. Suggest ONE completely different query that approaches the same theme from a different angle. Max 4 words, start with country name, must be noticeably different from the original. Reply with ONLY the query, nothing else.'}]})
+          messages:[{role:"user",content:'The Pexels query "'+q+'" for '+queryData.country+' gave poor results. Suggest ONE completely different query for the same theme. Max 4 words, start with country name, must be noticeably different. Reply with ONLY the query, nothing else.'}]})
       });
       const d = await r.json();
-      const suggestion = d.content&&d.content[0]?d.content[0].text.trim():"";
-      setRegenState(prev=>({...prev,[key]:{loading:false,suggestion:suggestion,input:suggestion,show:true}}));
+      const suggestion = (d.content&&d.content[0]?d.content[0].text:"").trim();
+      setRegenState(prev=>({...prev,[key]:{loading:false,input:suggestion,show:true}}));
     } catch {
-      setRegenState(prev=>({...prev,[key]:{loading:false,suggestion:"",input:q,show:true}}));
+      setRegenState(prev=>({...prev,[key]:{loading:false,input:q,show:true}}));
     }
   };
 
   const refetchQuery = async (cat, oldQ, newQ) => {
     if (!newQ||!newQ.trim()) return;
-    const key = cat+"__"+oldQ;
-    setRegenState(prev=>({...prev,[key]:{...prev[key],loading:true}}));
+    const key = cat+"||"+oldQ;
+    // Show loading state over the images
+    setRegenState(prev=>({...prev,[key]:{...prev[key],fetching:true}}));
     const locale = queryData&&queryData.locale?queryData.locale:"en-US";
     try {
       const r = await fetch(PROXY+"/search?query="+encodeURIComponent(newQ.trim())+"&per_page=20&locale="+locale);
       const d = await r.json();
       const photos = (d.photos||[]).map(p=>({id:p.id,query:newQ.trim(),category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
       setImagePool(prev=>{
-        const updated = Object.assign({},prev);
-        updated[cat] = Object.assign({},prev[cat]);
-        delete updated[cat][oldQ];
-        updated[cat][newQ.trim()] = photos;
+        const updated = JSON.parse(JSON.stringify(prev));
+        // Rebuild the category preserving order, replacing oldQ in place
+        const newCat = {};
+        Object.keys(updated[cat]).forEach(k => {
+          if (k === oldQ) {
+            newCat[newQ.trim()] = photos;
+          } else {
+            newCat[k] = updated[cat][k];
+          }
+        });
+        updated[cat] = newCat;
         return updated;
       });
-      setRegenState(prev=>({...prev,[key]:{show:false,loading:false,suggestion:"",input:""}}));
+      // Close regen panel after success
+      setRegenState(prev=>({...prev,[key]:{show:false,loading:false,fetching:false,input:""}}));
     } catch {
-      setRegenState(prev=>({...prev,[key]:{...prev[key],loading:false}}));
+      setRegenState(prev=>({...prev,[key]:{...prev[key],fetching:false}}));
     }
   };
 
@@ -159,7 +172,7 @@ function App() {
     const rows=[["ID","Category","Query","Photographer","Pexels URL","Image URL"]];
     Object.values(picks).forEach(p=>rows.push([p.id,p.category,p.query,p.photographer,p.url,p.full]));
     const a=document.createElement("a");
-    a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(c=>'"'+c+'"').join(",")).join("\n")],{type:"text/csv"}));
+    a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(c=>'"'+String(c)+'"').join(",")).join("\n")],{type:"text/csv"}));
     a.download=(queryData&&queryData.country?queryData.country.toLowerCase().replace(/\s+/g,"_"):"starter_pack")+"_picks.csv";
     a.click();
   };
@@ -199,7 +212,7 @@ function App() {
             {stepLabels.map((label,i)=>(
               <div key={i} style={{display:"flex",alignItems:"center"}}>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
-                  <div style={{width:26,height:26,borderRadius:"50%",background:currentStep>=i?"#7c3aed":"#e8e8e8",color:currentStep>=i?"#fff":"#aaa",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{currentStep>i?"v":i+1}</div>
+                  <div style={{width:26,height:26,borderRadius:"50%",background:currentStep>=i?"#7c3aed":"#e8e8e8",color:currentStep>=i?"#fff":"#aaa",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{currentStep>i?"✓":i+1}</div>
                   <span style={{fontSize:10,color:currentStep===i?"#7c3aed":"#aaa",fontWeight:currentStep===i?700:400,whiteSpace:"nowrap"}}>{label}</span>
                 </div>
                 {i<stepLabels.length-1&&<div style={{width:40,height:2,background:currentStep>i?"#7c3aed":"#e8e8e8",margin:"0 4px",marginBottom:18}}/>}
@@ -305,7 +318,7 @@ function App() {
             <div style={{fontWeight:700,fontSize:18,marginBottom:6}}>Fetching image pool...</div>
             <div style={{color:"#7c3aed",fontSize:12,fontFamily:"monospace",marginBottom:20,background:"#f5f3ff",padding:"5px 12px",borderRadius:6,display:"inline-block"}}>"{progress.label}"</div>
             <div style={{background:"#e8e8e8",borderRadius:99,height:6,overflow:"hidden",marginBottom:8}}>
-              <div style={{height:"100%",background:"#7c3aed",borderRadius:99,width:(progress.current/progress.total*100)+"%",transition:"width 0.3s"}}/>
+              <div style={{height:"100%",background:"#7c3aed",borderRadius:99,width:(progress.total>0?(progress.current/progress.total*100):0)+"%",transition:"width 0.3s"}}/>
             </div>
             <div style={{fontSize:12,color:"#aaa"}}>{progress.current} of {progress.total} queries</div>
           </div>
@@ -359,13 +372,11 @@ function App() {
               })}
             </div>
 
-            {activeTab&&imagePool[activeTab]&&Object.entries(imagePool[activeTab]).map(function(entry){
-              const q = entry[0];
-              const photos = entry[1];
-              const key = activeTab+"__"+q;
+            {activeTab&&imagePool[activeTab]&&Object.entries(imagePool[activeTab]).map(([q, photos])=>{
+              const key = activeTab+"||"+q;
               const regen = regenState[key]||{};
               return (
-                <div key={q} style={{marginBottom:24}}>
+                <div key={q} style={{marginBottom:28}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
                     <span style={{fontFamily:"monospace",fontSize:11,background:"#f3f4f6",padding:"4px 10px",borderRadius:6,color:"#555"}}>"{q}"</span>
                     <span style={{fontSize:11,color:"#bbb"}}>{photos.length} images</span>
@@ -376,39 +387,56 @@ function App() {
                       </button>
                     )}
                   </div>
+
                   {regen.show&&(
                     <div style={{background:"#f5f3ff",border:"0.5px solid #c4b5fd",borderRadius:8,padding:"12px 14px",marginBottom:12}}>
                       <div style={{fontSize:12,color:"#5b21b6",fontWeight:600,marginBottom:8}}>
-                        {regen.loading?"Thinking of a better query...":"Edit or use AI suggestion:"}
+                        {regen.loading ? "Getting AI suggestion..." : regen.fetching ? "Fetching new images..." : "Edit or use AI suggestion:"}
                       </div>
-                      {!regen.loading&&(
+                      {!regen.loading&&!regen.fetching&&(
                         <div style={{display:"flex",gap:8}}>
                           <input value={regen.input||""} onChange={e=>setRegenState(prev=>({...prev,[key]:{...prev[key],input:e.target.value}}))}
                             style={{flex:1,padding:"8px 12px",border:"1.5px solid #c4b5fd",borderRadius:7,fontSize:13,fontFamily:"monospace",outline:"none"}}/>
                           <button onClick={()=>refetchQuery(activeTab,q,regen.input)}
-                            style={{padding:"8px 14px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                            Fetch
+                            style={{padding:"8px 16px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                            Fetch new images
                           </button>
                           <button onClick={()=>setRegenState(prev=>({...prev,[key]:{show:false}}))}
-                            style={{padding:"8px 12px",background:"#f0f0f0",border:"none",borderRadius:7,fontSize:12,cursor:"pointer"}}>x</button>
+                            style={{padding:"8px 12px",background:"#f0f0f0",border:"none",borderRadius:7,fontSize:12,cursor:"pointer"}}>Cancel</button>
+                        </div>
+                      )}
+                      {(regen.loading||regen.fetching)&&(
+                        <div style={{color:"#7c3aed",fontSize:12,fontStyle:"italic"}}>
+                          {regen.fetching ? "Loading images for: "+regen.input : "Thinking..."}
                         </div>
                       )}
                     </div>
                   )}
-                  {photos.length===0
-                    ?<div style={{color:"#aaa",fontSize:13}}>No results</div>
-                    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:7}}>
-                      {photos.map(p=>(
-                        <div key={p.id} style={{position:"relative",borderRadius:8,overflow:"hidden",aspectRatio:"16/10",cursor:"pointer",outline:isPicked(p.id)?"3px solid "+CAT_COLORS[activeTab]:"none",outlineOffset:2}}>
-                          <img src={p.thumb} onClick={()=>setLightbox(p)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
-                          <button onClick={function(e){e.stopPropagation();togglePick(p);}}
-                            style={{position:"absolute",top:6,right:6,background:isPicked(p.id)?"#f59e0b":"rgba(0,0,0,0.45)",border:"none",borderRadius:"50%",width:28,height:28,color:"#fff",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                            {isPicked(p.id)?"★":"+"}
-                          </button>
-                          {isPicked(p.id)&&<div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(245,158,11,0.9)",padding:"3px 8px",fontSize:10,color:"#fff",fontWeight:700,textAlign:"center"}}>PICKED</div>}
-                        </div>
+
+                  {regen.fetching&&(
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:7}}>
+                      {[...Array(8)].map((_,i)=>(
+                        <div key={i} style={{borderRadius:8,aspectRatio:"16/10",background:"linear-gradient(90deg,#f0ebff,#e8e0ff,#f0ebff)",backgroundSize:"200% 100%",animation:"shimmer 1.5s infinite"}}/>
                       ))}
-                    </div>}
+                    </div>
+                  )}
+
+                  {!regen.fetching&&(
+                    photos.length===0
+                      ?<div style={{color:"#aaa",fontSize:13,padding:"20px 0"}}>No results for this query</div>
+                      :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:7}}>
+                        {photos.map(p=>(
+                          <div key={p.id} style={{position:"relative",borderRadius:8,overflow:"hidden",aspectRatio:"16/10",cursor:"pointer",outline:isPicked(p.id)?"3px solid "+CAT_COLORS[activeTab]:"none",outlineOffset:2}}>
+                            <img src={p.thumb} onClick={()=>setLightbox(p)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                            <button onClick={e=>{e.stopPropagation();togglePick(p);}}
+                              style={{position:"absolute",top:6,right:6,background:isPicked(p.id)?"#f59e0b":"rgba(0,0,0,0.45)",border:"none",borderRadius:"50%",width:28,height:28,color:"#fff",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                              {isPicked(p.id)?"★":"+"}
+                            </button>
+                            {isPicked(p.id)&&<div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(245,158,11,0.9)",padding:"3px 8px",fontSize:10,color:"#fff",fontWeight:700,textAlign:"center"}}>PICKED</div>}
+                          </div>
+                        ))}
+                      </div>
+                  )}
                 </div>
               );
             })}
@@ -418,7 +446,7 @@ function App() {
 
       {lightbox&&(
         <div onClick={()=>setLightbox(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div onClick={function(e){e.stopPropagation();}} style={{background:"#fff",borderRadius:12,overflow:"hidden",maxWidth:800,width:"100%"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,overflow:"hidden",maxWidth:800,width:"100%"}}>
             <img src={lightbox.full} style={{width:"100%",maxHeight:"65vh",objectFit:"contain",background:"#111",display:"block"}}/>
             <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
               <div>
@@ -436,6 +464,8 @@ function App() {
           </div>
         </div>
       )}
+
+      <style>{`@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}`}</style>
     </div>
   );
 }
