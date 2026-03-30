@@ -119,7 +119,7 @@ function App() {
       const r = await fetch(PROXY+"/claude", {
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:50,
-          messages:[{role:"user",content:'The Pexels query "'+q+'" for '+queryData.country+' gave poor results. Suggest ONE better query. Max 4 words, start with country name. Reply with ONLY the query.'}]})
+          messages:[{role:"user",content:'The Pexels query "'+q+'" for '+queryData.country+' gave poor or repetitive results. Suggest ONE completely different query that approaches the same theme from a different angle. Max 4 words, start with country name, must be noticeably different from the original. Reply with ONLY the query, nothing else.'}]})
       });
       const d = await r.json();
       const suggestion = d.content&&d.content[0]?d.content[0].text.trim():"";
