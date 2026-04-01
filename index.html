@@ -7,7 +7,10 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:-apple-system,'Inter',system-ui,sans-serif;background:#f5f5f5;color:#1a1a2e;}</style>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,'Inter',system-ui,sans-serif;background:#f5f5f5;color:#1a1a2e;}
+</style>
 </head>
 <body>
 <div id="root"></div>
@@ -26,14 +29,19 @@ Given a visual content audit:
 3. Map to 5 categories: People & Lifestyle, Food & Drink, Culture & Identity, Places & Environment, Events & Seasonal
 4. Generate 6-8 queries per category
 
-CRITICAL: MAXIMUM 4 WORDS per query. ALWAYS start with country name.
-GOOD examples: "thailand songkran street", "vietnam pho vendor", "bangkok night market"
-BAD examples: "thailand families celebrating water festival", "vietnam people eating street food together"
-Translate local terms visually. Favor candid street-level natural light. Avoid studio shots tourist imagery.
-For Western European markets use city names and specific behaviours e.g. "amsterdam canal cycling"
+CRITICAL RULES:
+- MAXIMUM 4 WORDS per query
+- ALWAYS start with country name
+- Translate local terms visually: "banh xeo" becomes "vietnam street pancake"
+- Favor candid, street-level, natural light photography
+- No studio shots, no tourist clichés, no isolated objects
+- For Western European markets use city names and specific behaviours
 
-Respond ONLY with valid JSON no markdown:
-{"country":"string","locale":"string","style_direction":"string","priority_themes":["string"],"categories":{"People & Lifestyle":["q1"],"Food & Drink":["q1"],"Culture & Identity":["q1"],"Places & Environment":["q1"],"Events & Seasonal":["q1"]}}`;
+Good examples: "thailand songkran street", "vietnam pho vendor", "amsterdam canal cycling"
+Bad examples: "thailand families celebrating water festival", "vietnam people eating street food together"
+
+Respond ONLY with valid JSON, no markdown:
+{"country":"string","locale":"string","style_direction":"string","priority_themes":["string"],"categories":{"People & Lifestyle":["q1","q2"],"Food & Drink":["q1","q2"],"Culture & Identity":["q1","q2"],"Places & Environment":["q1","q2"],"Events & Seasonal":["q1","q2"]}}`;
 
 function App() {
   const [step, setStep] = React.useState("upload");
@@ -63,128 +71,156 @@ function App() {
 
   const generateQueries = async () => {
     if (!fileData && !pasteText.trim()) { setError("Please upload a PDF or paste audit text."); return; }
-    setError(""); setStep("generating");
+    setError("");
+    setStep("generating");
     try {
       const msgs = fileData
-        ? [{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:fileData}},{type:"text",text:"Extract visual content gaps and generate starter pack queries."}]}]
-        : [{role:"user",content:"Audit:\n\n"+pasteText+"\n\nExtract gaps and generate starter pack queries."}];
+        ? [{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:fileData}},{type:"text",text:"Extract visual content gaps and generate starter pack queries as JSON."}]}]
+        : [{role:"user",content:"Audit:\n\n"+pasteText+"\n\nExtract gaps and generate starter pack queries as JSON."}];
       const res = await fetch(PROXY+"/claude", {
-        method:"POST",headers:{"Content-Type":"application/json"},
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:SYSTEM_PROMPT,messages:msgs})
       });
       const data = await res.json();
-      const raw = data.content && data.content[0] ? data.content[0].text : "";
+      const raw = (data.content && data.content[0]) ? data.content[0].text : "";
       const parsed = JSON.parse(raw.replace(/```json|```/g,"").trim());
       setQueryData(parsed);
-      const eq={}, nq={};
-      CATEGORIES.forEach(cat=>{eq[cat]=[...(parsed.categories&&parsed.categories[cat]?parsed.categories[cat]:[])];nq[cat]="";});
-      setEditableQ(eq); setNewQInputs(nq); setStep("review");
-    } catch(e) { setError("Something went wrong. Please try again."); setStep("upload"); }
+      const eq = {}, nq = {};
+      CATEGORIES.forEach(cat => {
+        eq[cat] = [...(parsed.categories && parsed.categories[cat] ? parsed.categories[cat] : [])];
+        nq[cat] = "";
+      });
+      setEditableQ(eq);
+      setNewQInputs(nq);
+      setStep("review");
+    } catch(e) {
+      setError("Something went wrong generating queries. Please try again.");
+      setStep("upload");
+    }
   };
 
-  const removeQ = (cat,idx) => setEditableQ(prev=>({...prev,[cat]:prev[cat].filter((_,i)=>i!==idx)}));
-  const updateQ = (cat,idx,val) => setEditableQ(prev=>{const u=[...prev[cat]];u[idx]=val;return{...prev,[cat]:u};});
+  const removeQ = (cat, idx) => setEditableQ(prev => ({...prev, [cat]: prev[cat].filter((_,i) => i !== idx)}));
+  const updateQ = (cat, idx, val) => setEditableQ(prev => { const u = [...prev[cat]]; u[idx] = val; return {...prev, [cat]: u}; });
   const addQ = cat => {
-    const val=newQInputs[cat]&&newQInputs[cat].trim();
-    if(!val) return;
-    setEditableQ(prev=>({...prev,[cat]:[...prev[cat],val]}));
-    setNewQInputs(prev=>({...prev,[cat]:""}));
+    const val = newQInputs[cat] && newQInputs[cat].trim();
+    if (!val) return;
+    setEditableQ(prev => ({...prev, [cat]: [...prev[cat], val]}));
+    setNewQInputs(prev => ({...prev, [cat]: ""}));
   };
 
   const fetchImages = async () => {
     setStep("fetching");
-    const locale = queryData&&queryData.locale?queryData.locale:"en-US";
-    const totalQ = Object.values(editableQ).flat().length;
-    let done=0; const pool={}; const seenIds=new Set();
+    const locale = queryData && queryData.locale ? queryData.locale : "en-US";
+    const allQ = Object.values(editableQ).flat();
+    const total = allQ.length;
+    let done = 0;
+    const pool = {};
+    const seenIds = new Set();
     for (const cat of CATEGORIES) {
-      pool[cat]={};
-      for (const q of (editableQ[cat]||[])) {
-        setProgress({current:++done,total:totalQ,label:q});
+      pool[cat] = {};
+      for (const q of (editableQ[cat] || [])) {
+        setProgress({current: ++done, total, label: q});
         try {
           const r = await fetch(PROXY+"/search?query="+encodeURIComponent(q)+"&per_page=20&locale="+locale);
-          if (!r.ok) throw new Error("HTTP "+r.status);
           const d = await r.json();
-          pool[cat][q]=(d.photos||[]).filter(p=>{if(seenIds.has(p.id))return false;seenIds.add(p.id);return true;})
-            .map(p=>({id:p.id,query:q,category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
-        } catch(err){pool[cat][q]=[];}
+          pool[cat][q] = (d.photos || [])
+            .filter(p => { if (seenIds.has(p.id)) return false; seenIds.add(p.id); return true; })
+            .map(p => ({id:p.id,query:q,category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
+        } catch(e) {
+          pool[cat][q] = [];
+        }
       }
     }
-    setImagePool(pool); setActiveTab(CATEGORIES[0]); setStep("gallery");
+    setImagePool(pool);
+    setActiveTab(CATEGORIES[0]);
+    setStep("gallery");
   };
 
   const suggestQuery = async (cat, q) => {
     const key = cat+"__"+q;
-    setRegenState(prev=>({...prev,[key]:{loading:true,suggestion:"",input:"",show:true}}));
+    setRegenState(prev => ({...prev, [key]: {loading:true, suggestion:"", input:"", show:true}}));
     try {
       const r = await fetch(PROXY+"/claude", {
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:50,
-          messages:[{role:"user",content:'The Pexels query "'+q+'" for '+queryData.country+' gave poor or repetitive results. Suggest ONE completely different query that approaches the same theme from a different angle. Max 4 words, start with country name, must be noticeably different from the original. Reply with ONLY the query, nothing else.'}]})
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:30,
+          messages:[{role:"user",content:'The Pexels query "'+q+'" for '+queryData.country+' gave poor results. Suggest ONE completely different alternative. Max 4 words, start with country name. Reply with ONLY the query.'}]
+        })
       });
       const d = await r.json();
-      const suggestion = d.content&&d.content[0]?d.content[0].text.trim():"";
-      setRegenState(prev=>({...prev,[key]:{loading:false,suggestion:suggestion,input:suggestion,show:true}}));
-    } catch {
-      setRegenState(prev=>({...prev,[key]:{loading:false,suggestion:"",input:q,show:true}}));
+      const suggestion = (d.content && d.content[0]) ? d.content[0].text.trim() : "";
+      setRegenState(prev => ({...prev, [key]: {loading:false, suggestion, input:suggestion, show:true}}));
+    } catch(e) {
+      setRegenState(prev => ({...prev, [key]: {loading:false, suggestion:"", input:q, show:true}}));
     }
   };
 
   const refetchQuery = async (cat, oldQ, newQ) => {
-    if (!newQ||!newQ.trim()) return;
+    if (!newQ || !newQ.trim()) return;
     const key = cat+"__"+oldQ;
-    setRegenState(prev=>({...prev,[key]:{...prev[key],loading:true}}));
-    const locale = queryData&&queryData.locale?queryData.locale:"en-US";
+    setRegenState(prev => ({...prev, [key]: {...prev[key], loading:true}}));
+    const locale = queryData && queryData.locale ? queryData.locale : "en-US";
     try {
       const r = await fetch(PROXY+"/search?query="+encodeURIComponent(newQ.trim())+"&per_page=20&locale="+locale);
       const d = await r.json();
-      const photos = (d.photos||[]).map(p=>({id:p.id,query:newQ.trim(),category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
-      setImagePool(prev=>{
-        const updated = Object.assign({},prev);
-        updated[cat] = Object.assign({},prev[cat]);
+      const photos = (d.photos || []).map(p => ({id:p.id,query:newQ.trim(),category:cat,thumb:p.src.medium,full:p.src.large2x,url:p.url,photographer:p.photographer}));
+      setImagePool(prev => {
+        const updated = {...prev};
+        updated[cat] = {...prev[cat]};
         delete updated[cat][oldQ];
         updated[cat][newQ.trim()] = photos;
         return updated;
       });
-      setRegenState(prev=>({...prev,[key]:{show:false,loading:false,suggestion:"",input:""}}));
-    } catch {
-      setRegenState(prev=>({...prev,[key]:{...prev[key],loading:false}}));
+      setRegenState(prev => ({...prev, [key]: {show:false, loading:false, suggestion:"", input:""}}));
+    } catch(e) {
+      setRegenState(prev => ({...prev, [key]: {...prev[key], loading:false}}));
     }
   };
 
-  const togglePick = img => setPicks(prev=>{const u={...prev};if(u[img.id])delete u[img.id];else u[img.id]=img;return u;});
+  const togglePick = img => setPicks(prev => { const u = {...prev}; if (u[img.id]) delete u[img.id]; else u[img.id] = img; return u; });
   const isPicked = id => !!picks[id];
   const picksCount = Object.keys(picks).length;
 
   const exportPicks = () => {
-    const rows=[["ID","Category","Query","Photographer","Pexels URL","Image URL"]];
-    Object.values(picks).forEach(p=>rows.push([p.id,p.category,p.query,p.photographer,p.url,p.full]));
-    const a=document.createElement("a");
-    a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(c=>'"'+c+'"').join(",")).join("\n")],{type:"text/csv"}));
-    a.download=(queryData&&queryData.country?queryData.country.toLowerCase().replace(/\s+/g,"_"):"starter_pack")+"_picks.csv";
+    const rows = [["ID","Category","Query","Photographer","Pexels URL","Image URL"]];
+    Object.values(picks).forEach(p => rows.push([p.id,p.category,p.query,p.photographer,p.url,p.full]));
+    const csv = rows.map(r => r.map(c => '"'+c+'"').join(",")).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+    a.download = (queryData && queryData.country ? queryData.country.toLowerCase().replace(/\s+/g,"_") : "starter_pack")+"_picks.csv";
     a.click();
   };
 
-  const reset = ()=>{setStep("upload");setFile(null);setFileData(null);setPasteText("");setQueryData(null);setEditableQ({});setImagePool(null);setActiveTab(null);setPicks({});setLightbox(null);setShowPicks(false);setError("");setRegenState({});};
+  const reset = () => {
+    setStep("upload"); setFile(null); setFileData(null); setPasteText(""); setQueryData(null);
+    setEditableQ({}); setImagePool(null); setActiveTab(null); setPicks({}); setLightbox(null);
+    setShowPicks(false); setError(""); setRegenState({});
+  };
 
-  const totalImages = imagePool?Object.values(imagePool).flatMap(Object.values).flat().length:0;
+  const totalImages = imagePool ? Object.values(imagePool).flatMap(Object.values).flat().length : 0;
   const totalEditableQ = Object.values(editableQ).flat().length;
-  const stepLabels = ["Upload","Generating","Review Queries","Fetching","Gallery"];
-  const stepIdx = {upload:0,generating:1,review:2,fetching:3,gallery:4};
-  const currentStep = stepIdx[step]||0;
+  const stepLabels = ["Upload","Generating","Review","Fetching","Gallery"];
+  const stepIdx = {upload:0, generating:1, review:2, fetching:3, gallery:4};
+  const currentStep = stepIdx[step] || 0;
 
   return (
     <div style={{fontFamily:"-apple-system,'Inter',system-ui,sans-serif",background:"#f5f5f5",minHeight:"100vh"}}>
+
+      {/* NAV */}
       <div style={{background:"#fff",borderBottom:"0.5px solid #e8e8e8",padding:"0 24px",height:50,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <div style={{background:"#7c3aed",borderRadius:6,width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>+</div>
           <span style={{fontWeight:600,fontSize:14,color:"#1a1a2e"}}>Starter Pack Generator</span>
           <span style={{background:"#f0ebff",borderRadius:5,padding:"2px 7px",fontSize:10,color:"#7c3aed",fontWeight:600}}>Internal Tool</span>
         </div>
-        {step==="gallery"&&(
+        {step === "gallery" && (
           <div style={{display:"flex",gap:8}}>
-            {picksCount>0&&(
+            {picksCount > 0 && (
               <React.Fragment>
-                <button onClick={()=>setShowPicks(!showPicks)} style={{padding:"7px 14px",background:showPicks?"#7c3aed":"#f0f0f0",color:showPicks?"#fff":"#333",border:"none",borderRadius:7,fontWeight:600,fontSize:13,cursor:"pointer"}}>{picksCount} Picks</button>
+                <button onClick={() => setShowPicks(!showPicks)} style={{padding:"7px 14px",background:showPicks?"#7c3aed":"#f0f0f0",color:showPicks?"#fff":"#333",border:"none",borderRadius:7,fontWeight:600,fontSize:13,cursor:"pointer"}}>{picksCount} Picks</button>
                 <button onClick={exportPicks} style={{padding:"7px 14px",background:"#10b981",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:13,cursor:"pointer"}}>Export CSV</button>
               </React.Fragment>
             )}
@@ -194,53 +230,73 @@ function App() {
       </div>
 
       <div style={{maxWidth:900,margin:"0 auto",padding:"32px 20px"}}>
-        {step!=="gallery"&&(
+
+        {/* STEP TRACKER */}
+        {step !== "gallery" && (
           <div style={{display:"flex",alignItems:"center",justifyContent:"center",marginBottom:32}}>
-            {stepLabels.map((label,i)=>(
+            {stepLabels.map((label, i) => (
               <div key={i} style={{display:"flex",alignItems:"center"}}>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
-                  <div style={{width:26,height:26,borderRadius:"50%",background:currentStep>=i?"#7c3aed":"#e8e8e8",color:currentStep>=i?"#fff":"#aaa",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{currentStep>i?"v":i+1}</div>
+                  <div style={{width:26,height:26,borderRadius:"50%",background:currentStep>=i?"#7c3aed":"#e8e8e8",color:currentStep>=i?"#fff":"#aaa",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>
+                    {currentStep > i ? "✓" : i+1}
+                  </div>
                   <span style={{fontSize:10,color:currentStep===i?"#7c3aed":"#aaa",fontWeight:currentStep===i?700:400,whiteSpace:"nowrap"}}>{label}</span>
                 </div>
-                {i<stepLabels.length-1&&<div style={{width:40,height:2,background:currentStep>i?"#7c3aed":"#e8e8e8",margin:"0 4px",marginBottom:18}}/>}
+                {i < stepLabels.length-1 && <div style={{width:40,height:2,background:currentStep>i?"#7c3aed":"#e8e8e8",margin:"0 4px",marginBottom:18}}/>}
               </div>
             ))}
           </div>
         )}
 
-        {step==="upload"&&(
+        {/* UPLOAD */}
+        {step === "upload" && (
           <div style={{maxWidth:560,margin:"0 auto"}}>
             <div style={{textAlign:"center",marginBottom:28}}>
               <h1 style={{fontSize:24,fontWeight:700,margin:"0 0 8px"}}>Generate a Visual Starter Pack</h1>
               <p style={{color:"#888",margin:0,fontSize:14}}>Upload a locale audit, review queries, fetch image pool</p>
             </div>
             <div style={{background:"#fff",borderRadius:12,padding:24,border:"0.5px solid #e8e8e8",marginBottom:14}}>
-              <label style={{fontSize:12,fontWeight:600,color:"#333",display:"block",marginBottom:8}}>Locale Audit</label>
-              <div onDrop={e=>{e.preventDefault();handleFile(e.dataTransfer.files[0]);}} onDragOver={e=>e.preventDefault()} onClick={()=>fileRef.current.click()}
-                style={{border:"2px dashed "+(file?"#7c3aed":"#d1d5db"),borderRadius:8,padding:22,textAlign:"center",cursor:"pointer",background:file?"#f5f3ff":"#fafafa",marginBottom:12}}>
-                <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+              <label style={{fontSize:12,fontWeight:600,color:"#333",display:"block",marginBottom:8}}>Locale Audit PDF</label>
+              <div
+                onDrop={e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }}
+                onDragOver={e => e.preventDefault()}
+                onClick={() => fileRef.current.click()}
+                style={{border:"2px dashed "+(file?"#7c3aed":"#d1d5db"),borderRadius:8,padding:22,textAlign:"center",cursor:"pointer",background:file?"#f5f3ff":"#fafafa",marginBottom:12}}
+              >
+                <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={e => handleFile(e.target.files[0])}/>
                 {file
-                  ?<div><div style={{fontSize:24,marginBottom:4}}>📄</div><div style={{fontWeight:600,color:"#7c3aed",fontSize:13}}>{file.name}</div></div>
-                  :<div><div style={{fontSize:24,marginBottom:4}}>📁</div><div style={{fontWeight:600,fontSize:13}}>Drop PDF or click to browse</div></div>}
+                  ? <div><div style={{fontSize:24,marginBottom:4}}>📄</div><div style={{fontWeight:600,color:"#7c3aed",fontSize:13}}>{file.name}</div></div>
+                  : <div><div style={{fontSize:24,marginBottom:4}}>📁</div><div style={{fontWeight:600,fontSize:13}}>Drop PDF or click to browse</div></div>
+                }
               </div>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                <div style={{flex:1,height:1,background:"#e8e8e8"}}/><span style={{color:"#aaa",fontSize:11}}>or paste text</span><div style={{flex:1,height:1,background:"#e8e8e8"}}/>
+                <div style={{flex:1,height:1,background:"#e8e8e8"}}/>
+                <span style={{color:"#aaa",fontSize:11}}>or paste text</span>
+                <div style={{flex:1,height:1,background:"#e8e8e8"}}/>
               </div>
-              <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)} placeholder="Paste audit content here..."
-                style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",border:"1.5px solid #e8e8e8",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit",height:100,resize:"vertical"}}/>
+              <textarea
+                value={pasteText}
+                onChange={e => setPasteText(e.target.value)}
+                placeholder="Paste audit content here..."
+                style={{width:"100%",padding:"10px 12px",border:"1.5px solid #e8e8e8",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit",height:100,resize:"vertical"}}
+              />
             </div>
             <div style={{background:"#f0fdf4",border:"0.5px solid #bbf7d0",borderRadius:8,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#15803d"}}>
               Connected to Pexels via secure server · No API key needed
             </div>
-            {error&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 14px",color:"#dc2626",fontSize:13,marginBottom:12}}>{error}</div>}
-            <button onClick={generateQueries} disabled={!fileData&&!pasteText.trim()}
-              style={{width:"100%",padding:13,background:(!fileData&&!pasteText.trim())?"#e8e8e8":"#7c3aed",color:(!fileData&&!pasteText.trim())?"#aaa":"#fff",border:"none",borderRadius:9,fontWeight:700,fontSize:15,cursor:(!fileData&&!pasteText.trim())?"not-allowed":"pointer"}}>
+            {error && <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 14px",color:"#dc2626",fontSize:13,marginBottom:12}}>{error}</div>}
+            <button
+              onClick={generateQueries}
+              disabled={!fileData && !pasteText.trim()}
+              style={{width:"100%",padding:13,background:(!fileData&&!pasteText.trim())?"#e8e8e8":"#7c3aed",color:(!fileData&&!pasteText.trim())?"#aaa":"#fff",border:"none",borderRadius:9,fontWeight:700,fontSize:15,cursor:(!fileData&&!pasteText.trim())?"not-allowed":"pointer"}}
+            >
               Generate Queries
             </button>
           </div>
         )}
 
-        {step==="generating"&&(
+        {/* GENERATING */}
+        {step === "generating" && (
           <div style={{background:"#fff",borderRadius:12,padding:"60px 40px",maxWidth:480,margin:"0 auto",textAlign:"center",border:"0.5px solid #e8e8e8"}}>
             <div style={{fontSize:40,marginBottom:16}}>🧠</div>
             <div style={{fontWeight:700,fontSize:18,marginBottom:8}}>Reading your audit...</div>
@@ -248,113 +304,149 @@ function App() {
           </div>
         )}
 
-        {step==="review"&&queryData&&(
+        {/* REVIEW */}
+        {step === "review" && queryData && (
           <div>
             <div style={{background:"#7c3aed",borderRadius:12,padding:"22px 28px",marginBottom:20,color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
               <div>
-                <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:1.5,opacity:0.6,marginBottom:6}}>Review and Edit Queries</div>
+                <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:1.5,opacity:0.6,marginBottom:6}}>Review Queries</div>
                 <div style={{fontSize:24,fontWeight:700,marginBottom:6}}>{queryData.country}</div>
                 <div style={{fontSize:13,opacity:0.75}}>{queryData.style_direction}</div>
               </div>
-              <div style={{color:"#fff",textAlign:"right"}}>
+              <div style={{textAlign:"right"}}>
                 <div style={{fontSize:28,fontWeight:700}}>{totalEditableQ}</div>
                 <div style={{fontSize:12,opacity:0.65}}>queries ready</div>
               </div>
             </div>
             <div style={{background:"#f0ebff",border:"0.5px solid #c4b5fd",borderRadius:10,padding:"12px 16px",marginBottom:20,fontSize:13,color:"#5b21b6"}}>
-              Review your queries. Remove, edit or add your own. Then hit Fetch Images.
+              Review, edit, remove or add queries. Then hit Fetch Images.
             </div>
-            {CATEGORIES.map(cat=>{
-              const queries=editableQ[cat]||[];
-              return(
+            {CATEGORIES.map(cat => {
+              const queries = editableQ[cat] || [];
+              return (
                 <div key={cat} style={{background:"#fff",borderRadius:12,padding:24,border:"0.5px solid #e8e8e8",marginBottom:14,borderLeft:"3px solid "+CAT_COLORS[cat]}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
                     <div style={{fontWeight:700,fontSize:15}}>{CAT_ICONS[cat]} {cat}</div>
                     <div style={{fontSize:12,color:"#aaa"}}>{queries.length} queries</div>
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
-                    {queries.map((q,i)=>(
+                    {queries.map((q, i) => (
                       <div key={i} style={{display:"flex",gap:8,alignItems:"center"}}>
-                        <input value={q} onChange={e=>updateQ(cat,i,e.target.value)}
-                          style={{flex:1,padding:"9px 12px",border:"1.5px solid #e8e8e8",borderRadius:7,fontSize:12,fontFamily:"monospace",outline:"none"}}/>
-                        <button onClick={()=>removeQ(cat,i)}
-                          style={{width:30,height:30,background:"#fef2f2",border:"0.5px solid #fecaca",borderRadius:6,color:"#dc2626",fontSize:14,cursor:"pointer"}}>x</button>
+                        <input
+                          value={q}
+                          onChange={e => updateQ(cat, i, e.target.value)}
+                          style={{flex:1,padding:"9px 12px",border:"1.5px solid #e8e8e8",borderRadius:7,fontSize:12,fontFamily:"monospace",outline:"none"}}
+                        />
+                        <button onClick={() => removeQ(cat, i)} style={{width:30,height:30,background:"#fef2f2",border:"0.5px solid #fecaca",borderRadius:6,color:"#dc2626",fontSize:14,cursor:"pointer"}}>×</button>
                       </div>
                     ))}
                   </div>
                   <div style={{display:"flex",gap:8}}>
-                    <input value={newQInputs[cat]||""} onChange={e=>setNewQInputs(prev=>({...prev,[cat]:e.target.value}))}
-                      onKeyDown={e=>e.key==="Enter"&&addQ(cat)} placeholder="Add a query..."
-                      style={{flex:1,padding:"9px 12px",border:"1.5px solid #e8e8e8",borderRadius:7,fontSize:12,fontFamily:"monospace",outline:"none",background:"#fafafa"}}/>
-                    <button onClick={()=>addQ(cat)}
-                      style={{padding:"9px 14px",background:CAT_BG[cat],border:"0.5px solid "+CAT_COLORS[cat]+"44",borderRadius:7,color:CAT_COLORS[cat],fontWeight:700,fontSize:13,cursor:"pointer"}}>Add</button>
+                    <input
+                      value={newQInputs[cat] || ""}
+                      onChange={e => setNewQInputs(prev => ({...prev, [cat]: e.target.value}))}
+                      onKeyDown={e => e.key === "Enter" && addQ(cat)}
+                      placeholder="Add a query..."
+                      style={{flex:1,padding:"9px 12px",border:"1.5px solid #e8e8e8",borderRadius:7,fontSize:12,fontFamily:"monospace",outline:"none",background:"#fafafa"}}
+                    />
+                    <button onClick={() => addQ(cat)} style={{padding:"9px 14px",background:CAT_BG[cat],border:"0.5px solid "+CAT_COLORS[cat]+"44",borderRadius:7,color:CAT_COLORS[cat],fontWeight:700,fontSize:13,cursor:"pointer"}}>Add</button>
                   </div>
                 </div>
               );
             })}
-            <button onClick={fetchImages}
-              style={{width:"100%",padding:13,background:"#7c3aed",color:"#fff",border:"none",borderRadius:9,fontWeight:700,fontSize:15,cursor:"pointer",marginTop:8}}>
-              Fetch {totalEditableQ} Queries - Get Images
+            <button onClick={fetchImages} style={{width:"100%",padding:13,background:"#7c3aed",color:"#fff",border:"none",borderRadius:9,fontWeight:700,fontSize:15,cursor:"pointer",marginTop:8}}>
+              Fetch {totalEditableQ} Queries → Get Images
             </button>
           </div>
         )}
 
-        {step==="fetching"&&(
+        {/* FETCHING */}
+        {step === "fetching" && (
           <div style={{background:"#fff",borderRadius:12,padding:"60px 40px",maxWidth:480,margin:"0 auto",textAlign:"center",border:"0.5px solid #e8e8e8"}}>
             <div style={{fontSize:40,marginBottom:16}}>🖼️</div>
             <div style={{fontWeight:700,fontSize:18,marginBottom:6}}>Fetching image pool...</div>
             <div style={{color:"#7c3aed",fontSize:12,fontFamily:"monospace",marginBottom:20,background:"#f5f3ff",padding:"5px 12px",borderRadius:6,display:"inline-block"}}>"{progress.label}"</div>
             <div style={{background:"#e8e8e8",borderRadius:99,height:6,overflow:"hidden",marginBottom:8}}>
-              <div style={{height:"100%",background:"#7c3aed",borderRadius:99,width:(progress.current/progress.total*100)+"%",transition:"width 0.3s"}}/>
+              <div style={{height:"100%",background:"#7c3aed",borderRadius:99,width:(progress.total?progress.current/progress.total*100:0)+"%",transition:"width 0.3s"}}/>
             </div>
             <div style={{fontSize:12,color:"#aaa"}}>{progress.current} of {progress.total} queries</div>
           </div>
         )}
 
-        {step==="gallery"&&queryData&&imagePool&&(
+        {/* GALLERY */}
+        {step === "gallery" && queryData && imagePool && (
           <div style={{margin:"-32px -20px 0"}}>
+
+            {/* HERO */}
             <div style={{background:"#7c3aed",padding:"52px 48px 44px"}}>
               <div style={{maxWidth:1200,margin:"0 auto"}}>
                 <div style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"rgba(255,255,255,0.55)",fontWeight:700,marginBottom:14}}>Visual Starter Pack · {queryData.country}</div>
                 <div style={{fontSize:52,fontWeight:700,letterSpacing:"-2px",color:"#fff",lineHeight:1,marginBottom:16}}>From audit<br/>to image pool.</div>
-                <div style={{fontSize:14,color:"rgba(255,255,255,0.65)",lineHeight:1.7,maxWidth:560,marginBottom:36}}>Generated automatically from the {queryData.country} locale audit. AI extracted the visual gaps, translated them into search queries, and fetched candidate images from Pexels — ready for human curation.</div>
-                <div style={{display:"flex",gap:40,marginBottom:24}}>
-                  <div><div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>{totalImages}</div><div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Candidate images</div></div>
-                  <div><div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>{Object.values(editableQ).flat().length}</div><div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Search queries</div></div>
-                  <div><div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>5</div><div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Categories</div></div>
+                <div style={{fontSize:14,color:"rgba(255,255,255,0.65)",lineHeight:1.7,maxWidth:560,marginBottom:36}}>
+                  Generated automatically from the {queryData.country} locale audit. AI extracted the visual gaps, translated them into search queries, and fetched candidate images from Pexels — ready for human curation.
+                </div>
+                <div style={{display:"flex",gap:40,marginBottom:28}}>
+                  <div>
+                    <div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>{totalImages}</div>
+                    <div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Candidate images</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>{Object.values(editableQ).flat().length}</div>
+                    <div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Search queries</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>5</div>
+                    <div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Categories</div>
+                  </div>
                 </div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                  {(queryData.priority_themes||[]).map(t=><span key={t} style={{background:"rgba(255,255,255,0.15)",borderRadius:20,padding:"5px 14px",fontSize:12,color:"rgba(255,255,255,0.9)",fontWeight:500}}>{t}</span>)}
+                  {(queryData.priority_themes||[]).map(t => (
+                    <span key={t} style={{background:"rgba(255,255,255,0.15)",borderRadius:20,padding:"5px 14px",fontSize:12,color:"rgba(255,255,255,0.9)",fontWeight:500}}>{t}</span>
+                  ))}
                 </div>
               </div>
             </div>
 
-            <div style={{background:"#fff",padding:"48px"}}>
+            {/* HOW IT WORKS */}
+            <div style={{background:"#fff",padding:"48px",borderBottom:"0.5px solid #e8e8e8"}}>
               <div style={{maxWidth:1200,margin:"0 auto"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:28}}><span style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"#7c3aed",fontWeight:700}}>How it works</span><div style={{flex:1,height:"0.5px",background:"#e8e8e8"}}/></div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:28}}>
+                  <span style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"#7c3aed",fontWeight:700}}>How it works</span>
+                  <div style={{flex:1,height:"0.5px",background:"#e8e8e8"}}/>
+                </div>
                 <div style={{display:"flex",alignItems:"stretch",gap:0}}>
-                  {[["1","Upload locale audit","PDF or text with visual gaps"],["2","AI extracts gaps","Themes, cultural nuances, style notes"],["3","Translates into queries",'"bánh xèo" → "vietnam street pancake"'],["4","Fetches image pool","Pexels with locale tagging"],["5","Human curation","Browse, pick, export selections"]].map((s,i)=>(
+                  {[
+                    ["1","Upload locale audit","PDF or text with visual gaps"],
+                    ["2","AI extracts gaps","Themes, cultural nuances, style notes"],
+                    ["3","Translates into queries",'"bánh xèo" → "vietnam street pancake"'],
+                    ["4","Fetches image pool","Pexels with locale tagging"],
+                    ["5","Human curation","Browse, pick, export selections"]
+                  ].map((s, i) => (
                     <React.Fragment key={i}>
                       <div style={{flex:1,background:"#fafafa",border:"0.5px solid #e8e8e8",borderRadius:i===0?"10px 0 0 10px":i===4?"0 10px 10px 0":"0",borderLeft:i>0?"none":"0.5px solid #e8e8e8",padding:20}}>
                         <div style={{width:22,height:22,background:"#7c3aed",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:10,fontWeight:700,marginBottom:10}}>{s[0]}</div>
                         <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>{s[1]}</div>
                         <div style={{fontSize:11,color:"#888",lineHeight:1.5}}>{s[2]}</div>
                       </div>
-                      {i<4&&<div style={{display:"flex",alignItems:"center",color:"#d1d5db",fontSize:16,padding:"0 6px",flexShrink:0}}>→</div>}
+                      {i < 4 && <div style={{display:"flex",alignItems:"center",color:"#d1d5db",fontSize:16,padding:"0 6px",flexShrink:0}}>→</div>}
                     </React.Fragment>
                   ))}
                 </div>
               </div>
             </div>
 
+            {/* AUDIT → QUERIES PANEL */}
             <div style={{background:"#fafafa",padding:"48px",borderBottom:"0.5px solid #e8e8e8"}}>
               <div style={{maxWidth:1200,margin:"0 auto"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:28}}><span style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"#7c3aed",fontWeight:700}}>Audit gaps → visual queries</span><div style={{flex:1,height:"0.5px",background:"#e8e8e8"}}/></div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:28}}>
+                  <span style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"#7c3aed",fontWeight:700}}>Audit gaps → visual queries</span>
+                  <div style={{flex:1,height:"0.5px",background:"#e8e8e8"}}/>
+                </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 40px 1fr",gap:0,alignItems:"start"}}>
                   <div style={{border:"0.5px solid #e8e8e8",borderRadius:10,overflow:"hidden",background:"#fff"}}>
                     <div style={{padding:"14px 18px",background:"#fafafa",borderBottom:"0.5px solid #e8e8e8",fontSize:12,fontWeight:600,color:"#555"}}>From the audit</div>
                     <div style={{padding:"16px 18px"}}>
-                      {(queryData.priority_themes||[]).map(t=>(
+                      {(queryData.priority_themes||[]).map(t => (
                         <div key={t} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:10,paddingBottom:10,borderBottom:"0.5px solid #f5f5f5"}}>
                           <span style={{background:"#f0ebff",color:"#7c3aed",fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:4,whiteSpace:"nowrap",flexShrink:0,marginTop:1}}>Priority</span>
                           <span style={{fontSize:12,color:"#555",lineHeight:1.5}}>{t}</span>
@@ -366,7 +458,7 @@ function App() {
                   <div style={{border:"0.5px solid #e8e8e8",borderRadius:10,overflow:"hidden",background:"#fff"}}>
                     <div style={{padding:"14px 18px",background:"#fafafa",borderBottom:"0.5px solid #e8e8e8",fontSize:12,fontWeight:600,color:"#555"}}>Translated into queries</div>
                     <div style={{padding:"16px 18px"}}>
-                      {Object.values(editableQ).flat().slice(0,10).map(q=>(
+                      {Object.values(editableQ).flat().slice(0,12).map(q => (
                         <span key={q} style={{display:"inline-block",background:"#f5f5f5",border:"0.5px solid #e8e8e8",borderRadius:6,padding:"4px 10px",fontFamily:"monospace",fontSize:11,color:"#555",margin:"3px 3px 3px 0"}}>"{q}"</span>
                       ))}
                     </div>
@@ -375,136 +467,163 @@ function App() {
               </div>
             </div>
 
+            {/* CATEGORY BREAKDOWN */}
             <div style={{background:"#fff",padding:"48px",borderBottom:"0.5px solid #e8e8e8"}}>
               <div style={{maxWidth:1200,margin:"0 auto"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:28}}><span style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"#7c3aed",fontWeight:700}}>Image pool breakdown</span><div style={{flex:1,height:"0.5px",background:"#e8e8e8"}}/></div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:28}}>
+                  <span style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"#7c3aed",fontWeight:700}}>Image pool breakdown</span>
+                  <div style={{flex:1,height:"0.5px",background:"#e8e8e8"}}/>
+                </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12}}>
-                  {CATEGORIES.map(cat=>{
-                    const count=imagePool[cat]?Object.values(imagePool[cat]).flat().length:0;
-                    return <div key={cat} style={{borderRadius:8,padding:"14px 16px",background:CAT_BG[cat],border:"0.5px solid "+CAT_COLORS[cat]+"33"}}>
-                      <div style={{fontSize:16,marginBottom:6}}>{CAT_ICONS[cat]}</div>
-                      <div style={{fontSize:12,fontWeight:600,color:"#1a1a2e",marginBottom:3}}>{cat}</div>
-                      <div style={{fontSize:11,color:"#aaa"}}>{count} images</div>
-                    </div>;
+                  {CATEGORIES.map(cat => {
+                    const count = imagePool[cat] ? Object.values(imagePool[cat]).flat().length : 0;
+                    return (
+                      <div key={cat} style={{borderRadius:8,padding:"14px 16px",background:CAT_BG[cat],border:"0.5px solid "+CAT_COLORS[cat]+"33"}}>
+                        <div style={{fontSize:16,marginBottom:6}}>{CAT_ICONS[cat]}</div>
+                        <div style={{fontSize:12,fontWeight:600,color:"#1a1a2e",marginBottom:3}}>{cat}</div>
+                        <div style={{fontSize:11,color:"#aaa"}}>{count} images</div>
+                      </div>
+                    );
                   })}
                 </div>
               </div>
             </div>
 
-            <div style={{background:"#fafafa",borderBottom:"0.5px solid #e8e8e8",padding:"28px 48px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <div style={{fontSize:14,color:"#555"}}><strong style={{color:"#1a1a2e"}}>Ready to curate.</strong> Browse all {totalImages} candidate images by category below.</div>
-              {picksCount>0&&<div style={{display:"flex",gap:8}}>
-                <button onClick={()=>setShowPicks(!showPicks)} style={{padding:"9px 18px",background:showPicks?"#7c3aed":"#f0f0f0",color:showPicks?"#fff":"#333",border:"none",borderRadius:8,fontWeight:600,fontSize:13,cursor:"pointer"}}>{picksCount} Picks</button>
-                <button onClick={exportPicks} style={{padding:"9px 18px",background:"#10b981",color:"#fff",border:"none",borderRadius:8,fontWeight:600,fontSize:13,cursor:"pointer"}}>Export CSV</button>
-              </div>}
+            {/* CURATION BAR */}
+            <div style={{background:"#fafafa",borderBottom:"0.5px solid #e8e8e8",padding:"20px 48px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+              <div style={{fontSize:14,color:"#555"}}>
+                <strong style={{color:"#1a1a2e"}}>Browse and curate.</strong> Click + to pick an image. Click any image to preview.
+              </div>
+              {picksCount > 0 && (
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={() => setShowPicks(!showPicks)} style={{padding:"9px 18px",background:showPicks?"#7c3aed":"#f0f0f0",color:showPicks?"#fff":"#333",border:"none",borderRadius:8,fontWeight:600,fontSize:13,cursor:"pointer"}}>{picksCount} Picks</button>
+                  <button onClick={exportPicks} style={{padding:"9px 18px",background:"#10b981",color:"#fff",border:"none",borderRadius:8,fontWeight:600,fontSize:13,cursor:"pointer"}}>Export CSV</button>
+                </div>
+              )}
             </div>
 
-            <div style={{padding:"0 48px 48px"}}>
+            {/* GALLERY CONTENT */}
+            <div style={{padding:"32px 48px 64px"}}>
               <div style={{maxWidth:1200,margin:"0 auto"}}>
-                {showPicks&&picksCount>0&&(
-                  <div style={{background:"#fff",borderRadius:12,padding:20,margin:"24px 0",border:"2px solid #7c3aed"}}>
+
+                {/* PICKS PANEL */}
+                {showPicks && picksCount > 0 && (
+                  <div style={{background:"#fff",borderRadius:12,padding:20,marginBottom:24,border:"2px solid #7c3aed"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                       <div style={{fontWeight:700,fontSize:14,color:"#7c3aed"}}>{picksCount} images picked</div>
                       <button onClick={exportPicks} style={{padding:"7px 14px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer"}}>Export CSV</button>
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8}}>
-                      {Object.values(picks).map(p=>(
+                      {Object.values(picks).map(p => (
                         <div key={p.id} style={{position:"relative",borderRadius:7,overflow:"hidden",aspectRatio:"16/10"}}>
-                          <img src={p.thumb} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
-                          <button onClick={()=>togglePick(p)} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.5)",border:"none",borderRadius:"50%",width:20,height:20,color:"#fff",fontSize:10,cursor:"pointer"}}>x</button>
+                          <img src={p.thumb} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} alt=""/>
+                          <button onClick={() => togglePick(p)} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.5)",border:"none",borderRadius:"50%",width:20,height:20,color:"#fff",fontSize:10,cursor:"pointer"}}>×</button>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",margin:"24px 0"}}>
-                  {CATEGORIES.map(cat=>{
-                    const count=imagePool[cat]?Object.values(imagePool[cat]).flat().length:0;
-                    const catPicks=Object.values(picks).filter(p=>p.category===cat).length;
-                    return(
-                      <button key={cat} onClick={()=>setActiveTab(cat)}
+                {/* CATEGORY TABS */}
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:28}}>
+                  {CATEGORIES.map(cat => {
+                    const count = imagePool[cat] ? Object.values(imagePool[cat]).flat().length : 0;
+                    const catPicks = Object.values(picks).filter(p => p.category === cat).length;
+                    return (
+                      <button key={cat} onClick={() => setActiveTab(cat)}
                         style={{padding:"8px 16px",borderRadius:99,border:"2px solid "+(activeTab===cat?CAT_COLORS[cat]:"#e8e8e8"),background:activeTab===cat?CAT_BG[cat]:"#fff",fontWeight:activeTab===cat?700:400,fontSize:12,cursor:"pointer",color:activeTab===cat?"#1a1a2e":"#666",display:"flex",alignItems:"center",gap:6}}>
                         {CAT_ICONS[cat]} {cat}
                         <span style={{background:activeTab===cat?CAT_COLORS[cat]:"#e8e8e8",color:activeTab===cat?"#fff":"#888",borderRadius:99,padding:"1px 7px",fontSize:10,fontWeight:700}}>{count}</span>
-                        {catPicks>0&&<span style={{background:"#f59e0b",color:"#fff",borderRadius:99,padding:"1px 6px",fontSize:10}}>{catPicks}</span>}
+                        {catPicks > 0 && <span style={{background:"#f59e0b",color:"#fff",borderRadius:99,padding:"1px 6px",fontSize:10}}>{catPicks}</span>}
                       </button>
                     );
                   })}
                 </div>
 
-            {activeTab&&imagePool[activeTab]&&Object.entries(imagePool[activeTab]).map(function(entry){
-              const q = entry[0];
-              const photos = entry[1];
-              const key = activeTab+"__"+q;
-              const regen = regenState[key]||{};
-              return (
-                <div key={q} style={{marginBottom:24}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
-                    <span style={{fontFamily:"monospace",fontSize:11,background:"#f3f4f6",padding:"4px 10px",borderRadius:6,color:"#555"}}>"{q}"</span>
-                    <span style={{fontSize:11,color:"#bbb"}}>{photos.length} images</span>
-                    {!regen.show&&(
-                      <button onClick={()=>suggestQuery(activeTab,q)}
-                        style={{padding:"3px 10px",background:"#f0ebff",border:"0.5px solid #c4b5fd",borderRadius:6,color:"#7c3aed",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                        Regenerate
-                      </button>
-                    )}
-                  </div>
-                  {regen.show&&(
-                    <div style={{background:"#f5f3ff",border:"0.5px solid #c4b5fd",borderRadius:8,padding:"12px 14px",marginBottom:12}}>
-                      <div style={{fontSize:12,color:"#5b21b6",fontWeight:600,marginBottom:8}}>
-                        {regen.loading?"Thinking of a better query...":"Edit or use AI suggestion:"}
-                      </div>
-                      {!regen.loading&&(
-                        <div style={{display:"flex",gap:8}}>
-                          <input value={regen.input||""} onChange={e=>setRegenState(prev=>({...prev,[key]:{...prev[key],input:e.target.value}}))}
-                            style={{flex:1,padding:"8px 12px",border:"1.5px solid #c4b5fd",borderRadius:7,fontSize:13,fontFamily:"monospace",outline:"none"}}/>
-                          <button onClick={()=>refetchQuery(activeTab,q,regen.input)}
-                            style={{padding:"8px 14px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                            Fetch
+                {/* IMAGES */}
+                {activeTab && imagePool[activeTab] && Object.entries(imagePool[activeTab]).map(([q, photos]) => {
+                  const key = activeTab+"__"+q;
+                  const regen = regenState[key] || {};
+                  return (
+                    <div key={q} style={{marginBottom:32}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                        <span style={{fontFamily:"monospace",fontSize:11,background:"#f3f4f6",padding:"4px 10px",borderRadius:6,color:"#555"}}>"{q}"</span>
+                        <span style={{fontSize:11,color:"#bbb"}}>{photos.length} images</span>
+                        {!regen.show && (
+                          <button onClick={() => suggestQuery(activeTab, q)}
+                            style={{padding:"3px 10px",background:"#f0ebff",border:"0.5px solid #c4b5fd",borderRadius:6,color:"#7c3aed",fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                            Regenerate
                           </button>
-                          <button onClick={()=>setRegenState(prev=>({...prev,[key]:{show:false}}))}
-                            style={{padding:"8px 12px",background:"#f0f0f0",border:"none",borderRadius:7,fontSize:12,cursor:"pointer"}}>x</button>
+                        )}
+                      </div>
+                      {regen.show && (
+                        <div style={{background:"#f5f3ff",border:"0.5px solid #c4b5fd",borderRadius:8,padding:"12px 14px",marginBottom:12}}>
+                          <div style={{fontSize:12,color:"#5b21b6",fontWeight:600,marginBottom:8}}>
+                            {regen.loading ? "Finding a better query..." : "Edit or use AI suggestion:"}
+                          </div>
+                          {!regen.loading && (
+                            <div style={{display:"flex",gap:8}}>
+                              <input
+                                value={regen.input || ""}
+                                onChange={e => setRegenState(prev => ({...prev, [key]: {...prev[key], input: e.target.value}}))}
+                                style={{flex:1,padding:"8px 12px",border:"1.5px solid #c4b5fd",borderRadius:7,fontSize:13,fontFamily:"monospace",outline:"none"}}
+                              />
+                              <button onClick={() => refetchQuery(activeTab, q, regen.input)}
+                                style={{padding:"8px 14px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                                Fetch
+                              </button>
+                              <button onClick={() => setRegenState(prev => ({...prev, [key]: {show:false}}))}
+                                style={{padding:"8px 12px",background:"#f0f0f0",border:"none",borderRadius:7,fontSize:12,cursor:"pointer"}}>×</button>
+                            </div>
+                          )}
                         </div>
                       )}
+                      {photos.length === 0
+                        ? <div style={{color:"#aaa",fontSize:13,padding:"12px 0"}}>No results for this query.</div>
+                        : (
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+                            {photos.map(p => (
+                              <div key={p.id} style={{position:"relative",borderRadius:8,overflow:"hidden",aspectRatio:"4/3",cursor:"pointer",outline:isPicked(p.id)?"3px solid "+CAT_COLORS[activeTab]:"none",outlineOffset:2}}>
+                                <img src={p.thumb} onClick={() => setLightbox(p)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} alt=""/>
+                                <button
+                                  onClick={e => { e.stopPropagation(); togglePick(p); }}
+                                  style={{position:"absolute",top:6,right:6,background:isPicked(p.id)?"#f59e0b":"rgba(0,0,0,0.45)",border:"none",borderRadius:"50%",width:28,height:28,color:"#fff",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}
+                                >
+                                  {isPicked(p.id) ? "★" : "+"}
+                                </button>
+                                {isPicked(p.id) && (
+                                  <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(245,158,11,0.9)",padding:"3px 8px",fontSize:10,color:"#fff",fontWeight:700,textAlign:"center"}}>PICKED</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      }
                     </div>
-                  )}
-                  {photos.length===0
-                    ?<div style={{color:"#aaa",fontSize:13}}>No results</div>
-                    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:7}}>
-                      {photos.map(p=>(
-                        <div key={p.id} style={{position:"relative",borderRadius:8,overflow:"hidden",aspectRatio:"16/10",cursor:"pointer",outline:isPicked(p.id)?"3px solid "+CAT_COLORS[activeTab]:"none",outlineOffset:2}}>
-                          <img src={p.thumb} onClick={()=>setLightbox(p)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
-                          <button onClick={function(e){e.stopPropagation();togglePick(p);}}
-                            style={{position:"absolute",top:6,right:6,background:isPicked(p.id)?"#f59e0b":"rgba(0,0,0,0.45)",border:"none",borderRadius:"50%",width:28,height:28,color:"#fff",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                            {isPicked(p.id)?"★":"+"}
-                          </button>
-                          {isPicked(p.id)&&<div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(245,158,11,0.9)",padding:"3px 8px",fontSize:10,color:"#fff",fontWeight:700,textAlign:"center"}}>PICKED</div>}
-                        </div>
-                      ))}
-                    </div>}
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
       </div>
 
-      {lightbox&&(
-        <div onClick={()=>setLightbox(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div onClick={function(e){e.stopPropagation();}} style={{background:"#fff",borderRadius:12,overflow:"hidden",maxWidth:800,width:"100%"}}>
-            <img src={lightbox.full} style={{width:"100%",maxHeight:"65vh",objectFit:"contain",background:"#111",display:"block"}}/>
+      {/* LIGHTBOX */}
+      {lightbox && (
+        <div onClick={() => setLightbox(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div onClick={e => e.stopPropagation()} style={{background:"#fff",borderRadius:12,overflow:"hidden",maxWidth:800,width:"100%"}}>
+            <img src={lightbox.full} style={{width:"100%",maxHeight:"65vh",objectFit:"contain",background:"#111",display:"block"}} alt=""/>
             <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
               <div>
                 <div style={{fontWeight:600,fontSize:14}}>Photo by {lightbox.photographer}</div>
                 <div style={{color:"#888",fontSize:12,fontFamily:"monospace",marginTop:2}}>"{lightbox.query}"</div>
               </div>
               <div style={{display:"flex",gap:8}}>
-                <button onClick={()=>togglePick(lightbox)} style={{padding:"8px 16px",background:isPicked(lightbox.id)?"#f59e0b":"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontSize:13,fontWeight:600,cursor:"pointer"}}>
-                  {isPicked(lightbox.id)?"Picked!":"Pick this"}
+                <button onClick={() => togglePick(lightbox)} style={{padding:"8px 16px",background:isPicked(lightbox.id)?"#f59e0b":"#7c3aed",color:"#fff",border:"none",borderRadius:7,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                  {isPicked(lightbox.id) ? "Picked ★" : "Pick this"}
                 </button>
                 <a href={lightbox.url} target="_blank" rel="noreferrer" style={{padding:"8px 14px",background:"#f3f4f6",color:"#333",borderRadius:7,fontSize:13,fontWeight:600,textDecoration:"none"}}>View on Pexels</a>
-                <button onClick={()=>setLightbox(null)} style={{padding:"8px 12px",background:"#f3f4f6",border:"none",borderRadius:7,fontSize:13,cursor:"pointer"}}>Close</button>
+                <button onClick={() => setLightbox(null)} style={{padding:"8px 12px",background:"#f3f4f6",border:"none",borderRadius:7,fontSize:13,cursor:"pointer"}}>Close</button>
               </div>
             </div>
           </div>
