@@ -378,30 +378,28 @@ function App() {
           <div style={{margin:"-32px -20px 0",width:"100vw",position:"relative",left:"50%",right:"50%",marginLeft:"-50vw",marginRight:"-50vw"}}>
 
             {/* HERO */}
-            <div style={{background:"#7c3aed",padding:"52px 48px 44px"}}>
+            <div style={{background:"linear-gradient(135deg,#7c3aed 0%,#6d28d9 100%)",padding:"72px 64px 64px"}}>
               <div style={{maxWidth:1200,margin:"0 auto"}}>
-                <div style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"rgba(255,255,255,0.55)",fontWeight:700,marginBottom:14}}>Visual Starter Pack · {queryData.country}</div>
-                <div style={{fontSize:52,fontWeight:700,letterSpacing:"-2px",color:"#fff",lineHeight:1,marginBottom:16}}>From audit<br/>to image pool.</div>
-                <div style={{fontSize:14,color:"rgba(255,255,255,0.65)",lineHeight:1.7,maxWidth:560,marginBottom:36}}>
-                  Generated automatically from the {queryData.country} locale audit. AI extracted the visual gaps, translated them into search queries, and fetched candidate images from Pexels — ready for human curation.
+                <div style={{fontSize:10,textTransform:"uppercase",letterSpacing:2,color:"rgba(255,255,255,0.55)",fontWeight:700,marginBottom:18}}>Visual Starter Pack · {queryData.country}</div>
+                <div style={{fontSize:64,fontWeight:800,letterSpacing:"-3px",color:"#fff",lineHeight:1,marginBottom:20}}>From audit<br/>to image pool.</div>
+                <div style={{fontSize:15,color:"rgba(255,255,255,0.65)",lineHeight:1.8,maxWidth:520,marginBottom:48}}>
+                  AI extracted the visual gaps, translated them into search queries, and fetched candidate images from Pexels — ready for human curation.
                 </div>
-                <div style={{display:"flex",gap:40,marginBottom:28}}>
-                  <div>
-                    <div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>{totalImages}</div>
-                    <div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Candidate images</div>
-                  </div>
-                  <div>
-                    <div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>{Object.values(editableQ).flat().length}</div>
-                    <div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Search queries</div>
-                  </div>
-                  <div>
-                    <div style={{fontSize:32,fontWeight:700,color:"#fff",letterSpacing:"-1px"}}>5</div>
-                    <div style={{fontSize:9,color:"rgba(255,255,255,0.45)",textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Categories</div>
-                  </div>
+                <div style={{display:"flex",gap:0,marginBottom:36}}>
+                  {[
+                    [totalImages,"Candidate images"],
+                    [Object.values(editableQ).flat().length,"Search queries"],
+                    [5,"Categories"]
+                  ].map(([val,label],i) => (
+                    <div key={i} style={{paddingRight:40,marginRight:40,borderRight:i<2?"1px solid rgba(255,255,255,0.2)":"none"}}>
+                      <div style={{fontSize:44,fontWeight:800,color:"#fff",letterSpacing:"-2px",lineHeight:1}}>{val}</div>
+                      <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginTop:6}}>{label}</div>
+                    </div>
+                  ))}
                 </div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                   {(queryData.priority_themes||[]).map(t => (
-                    <span key={t} style={{background:"rgba(255,255,255,0.15)",borderRadius:20,padding:"5px 14px",fontSize:12,color:"rgba(255,255,255,0.9)",fontWeight:500}}>{t}</span>
+                    <span key={t} style={{background:"rgba(255,255,255,0.15)",borderRadius:20,padding:"6px 16px",fontSize:12,color:"rgba(255,255,255,0.9)",fontWeight:500,border:"1px solid rgba(255,255,255,0.2)"}}>{t}</span>
                   ))}
                 </div>
               </div>
@@ -423,7 +421,7 @@ function App() {
                     ["5","Human curation","Browse, pick, export selections"]
                   ].map((s, i) => (
                     <React.Fragment key={i}>
-                      <div style={{flex:1,background:"#fafafa",border:"0.5px solid #e8e8e8",borderRadius:i===0?"10px 0 0 10px":i===4?"0 10px 10px 0":"0",borderLeft:i>0?"none":"0.5px solid #e8e8e8",padding:20}}>
+                      <div style={{flex:1,background:"#fff",border:"1px solid #e0e0e0",borderRadius:10,padding:24,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
                         <div style={{width:22,height:22,background:"#7c3aed",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:10,fontWeight:700,marginBottom:10}}>{s[0]}</div>
                         <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>{s[1]}</div>
                         <div style={{fontSize:11,color:"#888",lineHeight:1.5}}>{s[2]}</div>
